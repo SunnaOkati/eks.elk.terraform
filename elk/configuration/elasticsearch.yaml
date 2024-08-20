@@ -1,0 +1,128 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+ annotations:
+   eck.k8s.elastic.co/downward-node-labels: "topology.kubernetes.io/zone"
+ name: {{ .Values.cluster_name }}
+spec:
+ version: {{ .Values.es_version }}
+ auth:
+   fileRealm:
+   - secretName: secret-basic-auth
+ http:
+   service:
+     spec:
+       type: NodePort
+       ports:
+       - name: http
+         port: 9200
+         targetPort: 9200
+   tls:
+     selfSignedCertificate:
+       disabled: true
+ nodeSets:
+   - name: masters
+     count: {{ .Values.master_count }}
+     config:
+       node.attr.zone: ${ZONE}
+       cluster.routing.allocation.awareness.attributes: k8s_node_name,zone
+       bootstrap.memory_lock: true
+       node.roles: ["master"]
+       xpack.ml.enabled: true
+     podTemplate:
+       spec:
+       # restricts Elasticsearch nodes so they are only scheduled on Kubernetes hosts tagged with label instance-type: m5.2xlarge
+         affinity:
+           nodeAffinity:
+             requiredDuringSchedulingIgnoredDuringExecution:
+               nodeSelectorTerms:
+               - matchExpressions:
+                 - key: node.kubernetes.io/instance-type
+                   operator: In
+                   values: {{- range .Values.kube_es_master_instance_type }}
+                     - {{ . }}
+                     {{- end }}
+         containers:
+           - name: elasticsearch
+             env:
+               - name: ZONE
+                 valueFrom:
+                   fieldRef:
+                     fieldPath: metadata.annotations['topology.kubernetes.io/zone']
+             resources:
+               requests:
+                 memory: {{ .Values.master_memory_request }}
+                 cpu: {{ .Values.master_cpu_request }}
+               limits:
+                 memory: {{ .Values.master_memory_limit }}
+                 cpu: {{ .Values.master_cpu_limit }}
+           # Pod topology spread constraints to spread the Pods across availability zones in the Kubernetes cluster.
+         topologySpreadConstraints:
+           - maxSkew: {{.Values.kube_es_master_maxSkew}}
+             topologyKey: topology.kubernetes.io/zone
+             whenUnsatisfiable: DoNotSchedule
+             labelSelector:
+               matchLabels:
+                 elasticsearch.k8s.elastic.co/cluster-name: {{ .Values.cluster_name }}
+     volumeClaimTemplates:
+       - metadata:
+           name: elasticsearch-data
+         spec:
+           accessModes:
+             - ReadWriteOnce
+           resources:
+             requests:
+               storage: {{ .Values.master_disk_size }}
+           storageClassName: {{ .Values.storage_class }}
+   - name: data
+     count: {{ .Values.data_count }}
+     config:
+       node.attr.zone: ${ZONE}
+       cluster.routing.allocation.awareness.attributes: k8s_node_name,zone
+       bootstrap.memory_lock: true
+       node.roles: ["data"]
+     podTemplate:
+       spec:
+       # restricts Elasticsearch nodes so they are only scheduled on Kubernetes hosts tagged with any of the specified instance types.
+         affinity:
+           nodeAffinity:
+             requiredDuringSchedulingIgnoredDuringExecution:
+               nodeSelectorTerms:
+               - matchExpressions:
+                 - key: node.kubernetes.io/instance-type
+                   operator: In
+                   values: {{- range .Values.kube_es_data_instance_type }}
+                     - {{ . }}
+                     {{- end }}
+         containers:
+           - name: elasticsearch
+             env:
+               - name: ZONE
+                 valueFrom:
+                   fieldRef:
+                     fieldPath: metadata.annotations['topology.kubernetes.io/zone']
+             resources:
+               requests:
+                 memory: {{ .Values.data_memory_request }}
+                 cpu: {{ .Values.data_cpu_request }}
+               limits:
+                 memory: {{ .Values.data_memory_limit }}
+                 cpu: {{ .Values.data_cpu_limit }}
+       # Pod topology spread constraints to spread the Pods across availability zones in the Kubernetes cluster.
+         topologySpreadConstraints:
+           - maxSkew: {{.Values.kube_es_data_maxSkew}}
+             topologyKey: topology.kubernetes.io/zone
+             whenUnsatisfiable: DoNotSchedule
+             labelSelector:
+               matchLabels:
+                 elasticsearch.k8s.elastic.co/cluster-name: {{ .Values.cluster_name }}
+     volumeClaimTemplates:
+       - metadata:
+           name: elasticsearch-data
+         spec:
+           accessModes:
+             - ReadWriteOnce
+           resources:
+             requests:
+               storage: {{ .Values.data_disk_size }}
+           storageClassName: {{ .Values.storage_class }}
